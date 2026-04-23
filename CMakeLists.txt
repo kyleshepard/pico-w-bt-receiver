@@ -32,26 +32,26 @@ include(pico_sdk_import.cmake)
 set(PICO_EXTRAS_PATH ${USERHOME}/.pico-extras)
 include(${PICO_EXTRAS_PATH}/external/pico_extras_import.cmake)
 
-project(picow_blink C CXX ASM)
+project(picow_wav_samples C CXX ASM)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(picow_blink
-        picow_blink.c
+add_executable(picow_wav_samples
+        picow_wav_samples.c
         )
-target_link_libraries(picow_blink
+target_link_libraries(picow_wav_samples
         pico_audio_i2s
         pico_stdlib              # for core functionality
         pico_cyw43_arch_none     # we need Wifi to access the GPIO, but we don't need anything else
         )
-target_compile_definitions(picow_blink PRIVATE
+target_compile_definitions(picow_wav_samples PRIVATE
         PICO_AUDIO_I2S_MONO_INPUT=1
         #define for our example code
         USE_AUDIO_I2S=1
 )
 
 # create map/bin/hex file etc.
-pico_add_extra_outputs(picow_blink)
+pico_add_extra_outputs(picow_wav_samples)

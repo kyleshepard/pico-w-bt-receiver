@@ -48,7 +48,6 @@ target_link_libraries(picow_wav_samples
         pico_cyw43_arch_none     # we need Wifi to access the GPIO, but we don't need anything else
         )
 target_compile_definitions(picow_wav_samples PRIVATE
-        PICO_AUDIO_I2S_MONO_INPUT=1
         #define for our example code
         USE_AUDIO_I2S=1
 )

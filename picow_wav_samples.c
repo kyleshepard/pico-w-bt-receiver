@@ -3,6 +3,7 @@
  *
  * SPDX-License-Identifier: BSD-3-Clause
  */
+#pragma GCC optimize ("O0")
 
 #include <stdio.h>
 #include <math.h>
@@ -46,7 +47,6 @@ struct __attribute__((packed)) wav_header {
 
 struct audio_buffer_pool *init_audio(struct wav_header *header) {
     
-
     audio_format_t audio_format = {
             .format = header->format,
             .sample_freq = header->sample_rate,
@@ -55,7 +55,7 @@ struct audio_buffer_pool *init_audio(struct wav_header *header) {
 
     struct audio_buffer_format producer_format = {
             .format = &audio_format,
-            .sample_stride = 2 // what is sample stride?
+            .sample_stride = header->block_align,
     };
 
     struct audio_buffer_pool *producer_pool = audio_new_producer_pool(&producer_format, 3,
@@ -81,22 +81,27 @@ struct audio_buffer_pool *init_audio(struct wav_header *header) {
 }
 
 int main() {
+    set_sys_clock_khz(153600, true);
     stdio_init_all();
 
     unsigned char *wav_file = Cartoon_Laser_wav;
     unsigned int wav_file_length = Cartoon_Laser_wav_len;
     struct wav_header * header = (struct wav_header *) wav_file;
 
-    assert(header->file_type == 0x45564157);
+    assert(header->file_type == WAVE_LITERAL);
     assert(header->format == AUDIO_BUFFER_FORMAT_PCM_S16);
     assert(header->data == DATA_LITERAL);
+    assert(header->sample_rate == 44100);
 
     struct audio_buffer_pool *ap = init_audio(header);
 
     uint32_t startPos = 44;
     uint32_t offset = 0;
 
-    uint vol = 128;
+    uint vol = 256;
+    int16_t maxSamples[10];
+    int16_t minSamples[10];
+    int profilerIndex = 0;
     while (true) {
         int c = getchar_timeout_us(0);
         if (c >= 0) {
@@ -108,14 +113,28 @@ int main() {
         }
         struct audio_buffer *buffer = take_audio_buffer(ap, true);
         int16_t *samples = (int16_t *) buffer->buffer->bytes;
-        for (uint i = 0; i < buffer->max_sample_count; i++) {
-            int16_t current_sample = *((int16_t *)&wav_file[startPos + offset]);
-            samples[i] = (vol * current_sample) >> 8u;
-            offset++;
+        int16_t max = 0;
+        int16_t min = 0;
+        for (uint i = 0; i < buffer->max_sample_count; i ++) {
+            for (uint channel = 0; channel < header->num_channels; channel++) {
+                int16_t current_sample = *((int16_t *)&wav_file[startPos + offset]);
+                max = (current_sample > max) ? current_sample : max;
+                min = (current_sample < min) ? current_sample : min;
+                samples[i * header->num_channels + channel] = (vol * current_sample) >> 8u;
+                offset += header->block_align / header->num_channels;
+            }
             if (offset + startPos >= wav_file_length) offset = 0;
         }
         buffer->sample_count = buffer->max_sample_count;
         give_audio_buffer(ap, buffer);
+
+        if (profilerIndex < 10) {
+            maxSamples[profilerIndex] = max;
+            minSamples[profilerIndex] = min;
+            profilerIndex++;
+        } else {
+            printf("profile time");
+        }
     }
     puts("\n");
     return 0;

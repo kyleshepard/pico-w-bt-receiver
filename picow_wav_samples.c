@@ -81,7 +81,6 @@ struct audio_buffer_pool *init_audio(struct wav_header *header) {
 }
 
 int main() {
-    set_sys_clock_khz(153600, true);
     stdio_init_all();
 
     unsigned char *wav_file = Cartoon_Laser_wav;
@@ -95,13 +94,12 @@ int main() {
 
     struct audio_buffer_pool *ap = init_audio(header);
 
-    uint32_t startPos = 44;
-    uint32_t offset = 0;
+    uint32_t startByteOffset = sizeof(header);
+    uint32_t currentByteOffset = startByteOffset;
+    uint8_t channelStride = header->block_align / header->num_channels;
 
     uint vol = 256;
-    int16_t maxSamples[10];
-    int16_t minSamples[10];
-    int profilerIndex = 0;
+
     while (true) {
         int c = getchar_timeout_us(0);
         if (c >= 0) {
@@ -113,28 +111,18 @@ int main() {
         }
         struct audio_buffer *buffer = take_audio_buffer(ap, true);
         int16_t *samples = (int16_t *) buffer->buffer->bytes;
-        int16_t max = 0;
-        int16_t min = 0;
+
         for (uint i = 0; i < buffer->max_sample_count; i ++) {
             for (uint channel = 0; channel < header->num_channels; channel++) {
-                int16_t current_sample = *((int16_t *)&wav_file[startPos + offset]);
-                max = (current_sample > max) ? current_sample : max;
-                min = (current_sample < min) ? current_sample : min;
+                int16_t current_sample = *((int16_t *)&wav_file[currentByteOffset]);
                 samples[i * header->num_channels + channel] = (vol * current_sample) >> 8u;
-                offset += header->block_align / header->num_channels;
+                currentByteOffset += channelStride;
             }
-            if (offset + startPos >= wav_file_length) offset = 0;
+            if (currentByteOffset >= wav_file_length) currentByteOffset = startByteOffset;
         }
         buffer->sample_count = buffer->max_sample_count;
         give_audio_buffer(ap, buffer);
 
-        if (profilerIndex < 10) {
-            maxSamples[profilerIndex] = max;
-            minSamples[profilerIndex] = min;
-            profilerIndex++;
-        } else {
-            printf("profile time");
-        }
     }
     puts("\n");
     return 0;

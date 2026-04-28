@@ -34,6 +34,14 @@ bi_decl(bi_3pins_with_names(PICO_AUDIO_DATA_PIN, "I2S DIN", PICO_AUDIO_CLOCK_PIN
 #define BUTTON_LEFT 15
 #define BUTTON_RIGHT 14
 
+static audio_format_t audio_format = {
+    // hardcode to stereo. When mono, playback will be duplicated for both channels. workaround for audio_i2s to support mono/stereo dynamically
+    .channel_count = 2,
+};
+static struct audio_buffer_format producer_format = {
+    .format = &audio_format,
+};
+
 struct __attribute__((packed)) wav_header {
     uint32_t riff;
     uint32_t file_size;
@@ -50,23 +58,28 @@ struct __attribute__((packed)) wav_header {
     uint32_t data_size; // size of the data section
 };
 
-struct audio_buffer_pool *init_audio(struct wav_header *header) {
+struct wav_file_list_node {
+    struct wav_file_list_node *prev;
+    struct wav_file_list_node *next;
+    unsigned const char *wav_file;
+    unsigned int wav_file_length;
+};
 
+void set_audio_format_config(struct wav_header *header) {
     assert(header->file_type == WAVE_LITERAL);
     assert(header->format == AUDIO_BUFFER_FORMAT_PCM_S16);
     assert(header->data == DATA_LITERAL);
     assert(header->sample_rate == 44100);
     assert(header->num_channels == 1 || header->num_channels == 2);
-    
-    static audio_format_t audio_format;
+
     audio_format.format = header->format;
     audio_format.sample_freq = header->sample_rate;
-    // hardcode to stereo. When mono, playback will be duplicated for both channels. workaround for audio_i2s to support mono/stereo dynamically
-    audio_format.channel_count = 2;
 
-    struct audio_buffer_format producer_format;
-    producer_format.format = &audio_format;
     producer_format.sample_stride = header->num_channels == 2 ? header->block_align : header->block_align * 2;
+}
+
+struct audio_buffer_pool *init_audio(struct wav_header *header) {
+    set_audio_format_config(header);
 
     struct audio_buffer_pool *producer_pool = audio_new_producer_pool(&producer_format, 3,
                                                                       SAMPLES_PER_BUFFER); // todo correct size
@@ -90,34 +103,17 @@ struct audio_buffer_pool *init_audio(struct wav_header *header) {
     return producer_pool;
 }
 
-int main() {
-    stdio_init_all();
+void play_wav(struct audio_buffer_pool *ap, unsigned const char *wav_file, unsigned int wav_file_length) {
+    struct wav_header *header = (struct wav_header *) wav_file;
+    set_audio_format_config(header);
 
-    gpio_init(BUTTON_LEFT);
-    gpio_set_dir(BUTTON_LEFT, GPIO_IN);
-    gpio_pull_up(BUTTON_LEFT);
-
-    gpio_init(BUTTON_RIGHT);
-    gpio_set_dir(BUTTON_RIGHT, GPIO_IN);
-    gpio_pull_up(BUTTON_RIGHT);
-
-    unsigned char *wav_file = Cartoon_Laser_wav;
-    unsigned int wav_file_length = Cartoon_Laser_wav_len;
-    struct wav_header * header = (struct wav_header *) wav_file;
-
-    struct audio_buffer_pool *ap = init_audio(header);
-
-    uint32_t startByteOffset = sizeof(header);
+    uint32_t startByteOffset = sizeof(struct wav_header);
     uint32_t currentByteOffset = startByteOffset;
     uint8_t channelStride = header->block_align / header->num_channels;
 
-    uint vol = 128;
-
-    while (true) {
-        if (!gpio_get(BUTTON_LEFT) && vol > 0) vol -= 1;
-        if (!gpio_get(BUTTON_RIGHT) && vol < 255) vol += 1;
-        if (!gpio_get(BUTTON_LEFT) && !gpio_get(BUTTON_RIGHT)) break;
-
+    uint8_t vol = 128;
+    
+    while (currentByteOffset < wav_file_length) {
         struct audio_buffer *buffer = take_audio_buffer(ap, true);
         int16_t *samples = (int16_t *) buffer->buffer->bytes;
 
@@ -131,14 +127,62 @@ int main() {
                 currentByteOffset += channelStride;
             }
             if (currentByteOffset >= wav_file_length) {
-                currentByteOffset = startByteOffset;
-                sleep_ms(500);
+                break;
             }
         }
         buffer->sample_count = buffer->max_sample_count;
         give_audio_buffer(ap, buffer);
 
     }
+}
+
+int main() {
+    stdio_init_all();
+
+    gpio_init(BUTTON_LEFT);
+    gpio_set_dir(BUTTON_LEFT, GPIO_IN);
+    gpio_pull_up(BUTTON_LEFT);
+
+    gpio_init(BUTTON_RIGHT);
+    gpio_set_dir(BUTTON_RIGHT, GPIO_IN);
+    gpio_pull_up(BUTTON_RIGHT);
+
+    struct wav_file_list_node *laser = malloc(sizeof(struct wav_file_list_node));
+    struct wav_file_list_node *ouch = malloc(sizeof(struct wav_file_list_node));
+    struct wav_file_list_node *blow_bottle = malloc(sizeof(struct wav_file_list_node));
+
+    *laser = (struct wav_file_list_node){blow_bottle, ouch, Cartoon_Laser_wav, Cartoon_Laser_wav_len};
+    *ouch = (struct wav_file_list_node){laser, blow_bottle, Ouch_2_wav, Ouch_2_wav_len}; // TODO - this sounds bad. Need to find a way to re-init audio better for dynamic stereo/mono
+    *blow_bottle = (struct wav_file_list_node){ouch, laser, Casio_CTK_611_Blow_Bottle_C5_wav, Casio_CTK_611_Blow_Bottle_C5_wav_len};
+
+    struct wav_file_list_node *prev_wav = NULL;
+    struct wav_file_list_node *current_wav = laser;
+    struct audio_buffer_pool *ap = NULL;
+
+    uint vol = 128;
+
+    while(true) {
+        if (ap == NULL) {
+            struct wav_header *header = (struct wav_header*) current_wav->wav_file;
+            ap = init_audio(header);
+        }
+
+        if (!gpio_get(BUTTON_LEFT) && !gpio_get(BUTTON_RIGHT)) {
+            printf("Goodbye!\n");
+            break;
+        } else if (!gpio_get(BUTTON_LEFT)) {
+            current_wav = current_wav->prev;
+        } else if (!gpio_get(BUTTON_RIGHT)) {
+            current_wav = current_wav->next;
+        }
+
+        if (prev_wav != current_wav) {
+            play_wav(ap, current_wav->wav_file, current_wav->wav_file_length);
+            prev_wav = current_wav;
+            sleep_ms(500);
+        }
+    }
+
     puts("\n");
     return 0;
 }

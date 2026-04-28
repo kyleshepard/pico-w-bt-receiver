@@ -47,16 +47,14 @@ struct __attribute__((packed)) wav_header {
 
 struct audio_buffer_pool *init_audio(struct wav_header *header) {
     
-    audio_format_t audio_format = {
-            .format = header->format,
-            .sample_freq = header->sample_rate,
-            .channel_count = header->num_channels,
-    };
+    static audio_format_t audio_format;
+    audio_format.format = header->format;
+    audio_format.sample_freq = header->sample_rate;
+    audio_format.channel_count = header->num_channels;
 
-    struct audio_buffer_format producer_format = {
-            .format = &audio_format,
-            .sample_stride = header->block_align,
-    };
+    struct audio_buffer_format producer_format;
+    producer_format.format = &audio_format;
+    producer_format.sample_stride = header->block_align;
 
     struct audio_buffer_pool *producer_pool = audio_new_producer_pool(&producer_format, 3,
                                                                       SAMPLES_PER_BUFFER); // todo correct size

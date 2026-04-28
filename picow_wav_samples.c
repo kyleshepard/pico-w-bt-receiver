@@ -14,6 +14,8 @@
 #include "pico/audio_i2s.h"
 #include "pico/binary_info.h"
 #include "cartoon_laser.h"
+#include "blow_bottle.h"
+#include "ouch.h"
 
 // pins for waveshare Pico Audio
 #define PICO_AUDIO_DATA_PIN 26
@@ -28,6 +30,9 @@ bi_decl(bi_3pins_with_names(PICO_AUDIO_DATA_PIN, "I2S DIN", PICO_AUDIO_CLOCK_PIN
 // literally "WAVE" and "data"
 #define WAVE_LITERAL 0x45564157
 #define DATA_LITERAL 0x61746164
+
+#define BUTTON_LEFT 15
+#define BUTTON_RIGHT 14
 
 struct __attribute__((packed)) wav_header {
     uint32_t riff;
@@ -46,15 +51,22 @@ struct __attribute__((packed)) wav_header {
 };
 
 struct audio_buffer_pool *init_audio(struct wav_header *header) {
+
+    assert(header->file_type == WAVE_LITERAL);
+    assert(header->format == AUDIO_BUFFER_FORMAT_PCM_S16);
+    assert(header->data == DATA_LITERAL);
+    assert(header->sample_rate == 44100);
+    assert(header->num_channels == 1 || header->num_channels == 2);
     
     static audio_format_t audio_format;
     audio_format.format = header->format;
     audio_format.sample_freq = header->sample_rate;
-    audio_format.channel_count = header->num_channels;
+    // hardcode to stereo. When mono, playback will be duplicated for both channels. workaround for audio_i2s to support mono/stereo dynamically
+    audio_format.channel_count = 2;
 
     struct audio_buffer_format producer_format;
     producer_format.format = &audio_format;
-    producer_format.sample_stride = header->block_align;
+    producer_format.sample_stride = header->num_channels == 2 ? header->block_align : header->block_align * 2;
 
     struct audio_buffer_pool *producer_pool = audio_new_producer_pool(&producer_format, 3,
                                                                       SAMPLES_PER_BUFFER); // todo correct size
@@ -81,14 +93,17 @@ struct audio_buffer_pool *init_audio(struct wav_header *header) {
 int main() {
     stdio_init_all();
 
+    gpio_init(BUTTON_LEFT);
+    gpio_set_dir(BUTTON_LEFT, GPIO_IN);
+    gpio_pull_up(BUTTON_LEFT);
+
+    gpio_init(BUTTON_RIGHT);
+    gpio_set_dir(BUTTON_RIGHT, GPIO_IN);
+    gpio_pull_up(BUTTON_RIGHT);
+
     unsigned char *wav_file = Cartoon_Laser_wav;
     unsigned int wav_file_length = Cartoon_Laser_wav_len;
     struct wav_header * header = (struct wav_header *) wav_file;
-
-    assert(header->file_type == WAVE_LITERAL);
-    assert(header->format == AUDIO_BUFFER_FORMAT_PCM_S16);
-    assert(header->data == DATA_LITERAL);
-    assert(header->sample_rate == 44100);
 
     struct audio_buffer_pool *ap = init_audio(header);
 
@@ -96,17 +111,13 @@ int main() {
     uint32_t currentByteOffset = startByteOffset;
     uint8_t channelStride = header->block_align / header->num_channels;
 
-    uint vol = 256;
+    uint vol = 128;
 
     while (true) {
-        int c = getchar_timeout_us(0);
-        if (c >= 0) {
-            if (c == '-' && vol) vol -= 4;
-            if ((c == '=' || c == '+') && vol < 255) vol += 4;
-            if (c == 'q') break;
+        if (!gpio_get(BUTTON_LEFT) && vol > 0) vol -= 1;
+        if (!gpio_get(BUTTON_RIGHT) && vol < 255) vol += 1;
+        if (!gpio_get(BUTTON_LEFT) && !gpio_get(BUTTON_RIGHT)) break;
 
-            printf("vol = %d      \r", vol);
-        }
         struct audio_buffer *buffer = take_audio_buffer(ap, true);
         int16_t *samples = (int16_t *) buffer->buffer->bytes;
 
@@ -114,9 +125,15 @@ int main() {
             for (uint channel = 0; channel < header->num_channels; channel++) {
                 int16_t current_sample = *((int16_t *)&wav_file[currentByteOffset]);
                 samples[i * header->num_channels + channel] = (vol * current_sample) >> 8u;
+                if (header->num_channels == 1) {
+                    samples[i * header->num_channels + 1] = (vol * current_sample) >> 8u;
+                }
                 currentByteOffset += channelStride;
             }
-            if (currentByteOffset >= wav_file_length) currentByteOffset = startByteOffset;
+            if (currentByteOffset >= wav_file_length) {
+                currentByteOffset = startByteOffset;
+                sleep_ms(500);
+            }
         }
         buffer->sample_count = buffer->max_sample_count;
         give_audio_buffer(ap, buffer);
